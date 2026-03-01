@@ -107,3 +107,28 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+
+uint64
+sys_hello(void)
+{
+  return khello();
+}
+
+uint64
+sys_getpid2(void)
+{
+  return kgetpid2();
+}
+
+uint64 
+sys_getppid(void)
+{
+  return kgetppid();
+}
+
+uint64
+sys_getnumchild(void)
+{
+  return kgetnumchild();
+}

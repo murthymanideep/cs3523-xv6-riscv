@@ -688,3 +688,57 @@ procdump(void)
     printf("\n");
   }
 }
+
+
+int 
+khello(void)
+{
+  char *message="Hello from kernel!\n";
+  printf("%s",message);
+  return 0;
+}
+
+int 
+kgetpid2(void)
+{
+  return myproc()->pid;
+}
+
+int 
+kgetppid(void)
+{
+  int ppid=-1;
+  struct proc *process=mycpu();
+
+  acquire(&wait_lock);
+  if(process->parent)
+  {
+    acquire(&process->parent->lock);
+    ppid=process->parent->pid;
+    release(&process->parent->lock);
+  }
+  release(&wait_lock);
+
+  return ppid;
+}
+
+int 
+kgetnumchild(void)
+{
+  int numchild=0;
+  struct proc *process=myproc();
+
+  acquire(&wait_lock);
+  for(int i=0;i<NPROC;i++){
+    struct proc *curprocess=proc+i;
+    acquire(&curprocess->lock);
+    if(curprocess->state!=ZOMBIE && curprocess->parent==process)
+    {
+      numchild++;
+    }
+    release(&curprocess->lock);
+  }
+  release(&wait_lock);
+
+  return numchild;
+}
