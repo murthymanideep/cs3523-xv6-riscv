@@ -124,6 +124,7 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->systemcall_count = 0;
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -168,6 +169,7 @@ freeproc(struct proc *p)
   p->chan = 0;
   p->killed = 0;
   p->xstate = 0;
+  p->systemcall_count=0;
   p->state = UNUSED;
 }
 
@@ -689,11 +691,10 @@ procdump(void)
   }
 }
 
-
 int 
 khello(void)
 {
-  char *message="Hello from kernel!\n";
+  char *message="Hello from the kernel!\n";
   printf("%s",message);
   return 0;
 }
@@ -704,15 +705,14 @@ kgetpid2(void)
   return myproc()->pid;
 }
 
-int 
+int
 kgetppid(void)
 {
   int ppid=-1;
-  struct proc *process=mycpu();
+  struct proc *process=myproc();
 
   acquire(&wait_lock);
-  if(process->parent)
-  {
+  if(process->parent){
     acquire(&process->parent->lock);
     ppid=process->parent->pid;
     release(&process->parent->lock);
@@ -722,14 +722,16 @@ kgetppid(void)
   return ppid;
 }
 
-int 
-kgetnumchild(void)
+
+int
+kgetnumchild()
 {
   int numchild=0;
   struct proc *process=myproc();
 
   acquire(&wait_lock);
-  for(int i=0;i<NPROC;i++){
+  for(int i=0;i<NPROC;i++)
+  {
     struct proc *curprocess=proc+i;
     acquire(&curprocess->lock);
     if(curprocess->state!=ZOMBIE && curprocess->parent==process)
@@ -741,4 +743,37 @@ kgetnumchild(void)
   release(&wait_lock);
 
   return numchild;
+}
+
+int 
+kgetsyscount(void)
+{
+  struct proc* process=myproc();
+
+  acquire(&process->lock);
+  int numsyscount=process->systemcall_count;
+  release(&process->lock);
+  return numsyscount;
+}
+
+int
+kgetchildsyscount(int pid)
+{
+  struct proc *process=myproc();
+  int count=-1;
+
+  acquire(&wait_lock);
+  for(int i=0;i<NPROC;i++){
+    struct proc *curprocess=proc+i;
+    acquire(&curprocess->lock);
+    if(curprocess->parent==process && curprocess->pid==pid)
+    {
+      count=curprocess->systemcall_count;
+      release(&curprocess->lock);
+      break;
+    }
+    release(&curprocess->lock);
+  }
+  release(&wait_lock);
+  return count;
 }
