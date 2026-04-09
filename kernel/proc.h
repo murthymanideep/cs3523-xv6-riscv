@@ -91,7 +91,13 @@ struct proc {
   int killed;                  // If non-zero, have been killed
   int xstate;                  // Exit status to be returned to parent's wait
   int pid;                     // Process ID
+
   int systemcall_count;        // Total number of system calls invoked
+  int level;                   // Level
+  int ticks_used;              // Ticks used in curent slice
+  int ticks_total[4];          // Total ticks per level
+  int times_scheduled;         // Times scheduled
+  int slice_start_syscalls;    // Syscall count at slice start
 
   // wait_lock must be held when using this:
   struct proc *parent;         // Parent process
@@ -105,4 +111,11 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+};
+
+struct mlfqinfo{
+  int level;
+  int ticks[4];
+  int times_scheduled;
+  int total_syscalls;
 };

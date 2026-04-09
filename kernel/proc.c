@@ -15,6 +15,11 @@ struct proc *initproc;
 int nextpid = 1;
 struct spinlock pid_lock;
 
+int time_quantum[4]={2,4,8,16};
+int roundrobin_index[4]={0,0,0,0};
+struct spinlock roundrobin_lock[4]; 
+
+
 extern void forkret(void);
 static void freeproc(struct proc *p);
 
@@ -427,43 +432,93 @@ void
 scheduler(void)
 {
   struct proc *p;
-  struct cpu *c = mycpu();
+  struct cpu *c=mycpu();
+  c->proc=0;
 
-  c->proc = 0;
+  // The most recent process to run may have had interrupts
+  // turned off; enable them to avoid a deadlock if all
+  // processes are waiting. Then turn them back off
+  // to avoid a possible race between an interrupt
   for(;;){
-    // The most recent process to run may have had interrupts
-    // turned off; enable them to avoid a deadlock if all
-    // processes are waiting. Then turn them back off
-    // to avoid a possible race between an interrupt
-    // and wfi.
     intr_on();
     intr_off();
 
-    int found = 0;
-    for(p = proc; p < &proc[NPROC]; p++) {
-      acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
+    int found=0;
+    //Added 4 levels and applying round robin logic
+    //Scheduling is based on the system call heavy proccess
+    //System call heavy has high priority
+    for(int level=0;level<4;level++){
+      int start0,end0,start1,end1;
+      acquire(&roundrobin_lock[level]);
+      start0=roundrobin_index[level];
+      end0=NPROC;
+      start1=0;
+      end1=roundrobin_index[level];
+      release(&roundrobin_lock[level]);
+      for(int pass=0;pass<2;pass++){
+        int start=(pass==0)?start0:start1;
+        int end=(pass==0)?end0:end1;
 
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
-        found = 1;
+        for(int i=start;i<end;i++){
+          p=&proc[i];
+          acquire(&p->lock);
+          if(p->state==RUNNABLE && p->level==level){
+            found=1;
+
+            p->state=RUNNING;
+            c->proc=p;
+            p->times_scheduled++;
+            if(p->ticks_used==0){
+              p->slice_start_syscalls=p->systemcall_count;
+            }
+            acquire(&roundrobin_lock[level]);
+            roundrobin_index[level]=(i+1)%NPROC;
+            release(&roundrobin_lock[level]);
+
+            swtch(&c->context,&p->context);
+
+            if(p->state==RUNNABLE && p->ticks_used>=time_quantum[p->level]){
+              int delta=p->systemcall_count-p->slice_start_syscalls;
+              if(delta<p->ticks_used && p->level<3){
+                p->level++;
+              }
+              p->ticks_used=0;
+              p->slice_start_syscalls=p->systemcall_count;
+            }
+            c->proc = 0;
+            release(&p->lock);
+            break;
+          }
+          release(&p->lock);
+        }
+        if(found){
+          break;
+        }
       }
-      release(&p->lock);
+      if(found){
+        break;
+      }
     }
-    if(found == 0) {
-      // nothing to run; stop running on this core until an interrupt.
+    if(!found){
       asm volatile("wfi");
     }
   }
 }
 
+//Priority boost
+//boost only the runnable processes
+void priority_boost(void){
+  struct proc* p;
+  for(p=proc;p<&proc[NPROC];p++){
+    acquire(&p->lock);
+    if(p->state==RUNNABLE){
+      p->level=0;
+      p->ticks_used=0;
+      p->slice_start_syscalls= p->systemcall_count;
+    }
+    release(&p->lock);
+  }
+}
 // Switch to scheduler.  Must hold only p->lock
 // and have changed proc->state. Saves and restores
 // intena because intena is a property of this
