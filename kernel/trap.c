@@ -11,6 +11,12 @@ uint ticks;
 
 extern char trampoline[], uservec[];
 
+extern struct proc proc[];
+extern int time_quantum[];
+extern void priority_boost(void);
+
+uint global_ticks = 0;
+
 // in kernelvec.S, calls kerneltrap().
 void kernelvec();
 
@@ -42,35 +48,26 @@ usertrap(void)
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
-  // send interrupts and exceptions to kerneltrap(),
-  // since we're now in the kernel.
-  w_stvec((uint64)kernelvec);  //DOC: kernelvec
+  w_stvec((uint64)kernelvec);
 
   struct proc *p = myproc();
-  
-  // save user program counter.
   p->trapframe->epc = r_sepc();
-  
-  if(r_scause() == 8){
-    // system call
 
+  if(r_scause() == 8){
     if(killed(p))
       kexit(-1);
 
-    // sepc points to the ecall instruction,
-    // but we want to return to the next instruction.
     p->trapframe->epc += 4;
-
-    // an interrupt will change sepc, scause, and sstatus,
-    // so enable only now that we're done with those registers.
     intr_on();
-
     syscall();
+
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if((r_scause() == 15 || r_scause() == 13) &&
+
+  } else if((r_scause() == 15 || r_scause() == 13 || r_scause() == 12) &&
             vmfault(p->pagetable, r_stval(), (r_scause() == 13)? 1 : 0) != 0) {
-    // page fault on lazily-allocated page
+    // lazy allocation
+
   } else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
@@ -80,22 +77,59 @@ usertrap(void)
   if(killed(p))
     kexit(-1);
 
-  // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
-    yield();
+  if (which_dev==2){
+    struct proc *p=myproc();
+    int should_yield=0;
+
+    if (p!=0){
+      acquire(&p->lock);
+      p->ticks_used++;
+      p->ticks_total[p->level]++;
+      int time_slice=time_quantum[p->level];
+
+      if (p->ticks_used>=time_slice){
+        should_yield=1;
+      }
+      int curr_level=p->level;
+      release(&p->lock);
+
+      // check higher priority runnable process
+      if (should_yield==0){
+        struct proc *temp;
+        for (temp=proc;temp<&proc[NPROC];temp++){
+          acquire(&temp->lock);
+          if(temp->state==RUNNABLE && temp->level<curr_level){
+            should_yield=1;
+            release(&temp->lock);
+            break;
+          }
+          release(&temp->lock);
+        }
+      }
+    }
+
+    // priority boost
+    if (cpuid()==0){
+      global_ticks++;
+      if(global_ticks>=128){
+        global_ticks=0;
+        priority_boost();
+        should_yield=1;
+      }
+    }
+    if (should_yield){
+      yield();
+    }
+  }
 
   prepare_return();
 
-  // the user page table to switch to, for trampoline.S
-  uint64 satp = MAKE_SATP(p->pagetable);
-
-  // return to trampoline.S; satp value in a0.
+  uint64 satp=MAKE_SATP(p->pagetable);
   return satp;
 }
 
-//
+
 // set up trapframe and control registers for a return to user space
-//
 void
 prepare_return(void)
 {
@@ -152,14 +186,52 @@ kerneltrap()
   }
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2 && myproc() != 0)
-    yield();
+  if (which_dev==2){
+    struct proc *p=myproc();
+    int should_yield=0;
+    if (p!=0){
+      acquire(&p->lock);
+      p->ticks_used++;
+      p->ticks_total[p->level]++;
+      int time_slice=time_quantum[p->level];
 
-  // the yield() may have caused some traps to occur,
-  // so restore trap registers for use by kernelvec.S's sepc instruction.
+      if(p->ticks_used>=time_slice){
+        should_yield=1;
+      }
+      int curr_level=p->level;
+      release(&p->lock);
+      if (should_yield==0){
+        struct proc *temp;
+        for (temp=proc;temp<&proc[NPROC];temp++){
+          acquire(&temp->lock);
+          if (temp->state==RUNNABLE && temp->level<curr_level) {
+            should_yield=1;
+            release(&temp->lock);
+            break;
+          }
+          release(&temp->lock);
+        }
+      }
+    }
+
+    if (cpuid()==0){
+      global_ticks++;
+      if (global_ticks>=128){
+        global_ticks=0;
+        priority_boost();
+        should_yield=1;
+      }
+    }
+
+    if(p!=0 && should_yield){
+      yield();
+    }
+  }
+
   w_sepc(sepc);
   w_sstatus(sstatus);
 }
+
 
 void
 clockintr()
