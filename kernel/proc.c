@@ -130,6 +130,13 @@ found:
   p->pid = allocpid();
   p->state = USED;
   p->systemcall_count = 0;
+  p->level = 0;     
+  p->ticks_used = 0;             
+  p->times_scheduled = 0;       
+  p->slice_start_syscalls = 0; 
+  for(int i = 0; i < 4; i++) {
+      p->ticks_total[i] = 0;
+  }
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -176,6 +183,13 @@ freeproc(struct proc *p)
   p->xstate = 0;
   p->systemcall_count=0;
   p->state = UNUSED;
+  p->level = 0;     
+  p->ticks_used = 0;             
+  p->times_scheduled = 0;       
+  p->slice_start_syscalls = 0; 
+  for(int i = 0; i < 4; i++) {
+      p->ticks_total[i] = 0;
+  }
 }
 
 // Create a user page table for a given process, with no user memory,
@@ -831,4 +845,35 @@ kgetchildsyscount(int pid)
   }
   release(&wait_lock);
   return count;
+}
+
+int
+kgetlevel(void)
+{
+  struct proc *p=myproc();
+  acquire(&p->lock);
+  int level=p->level;
+  release(&p->lock);
+  return level;
+}
+
+int
+kgetmlfqinfo(int pid, struct mlfqinfo *info)
+{
+  struct proc *p;
+  for(p=proc;p<&proc[NPROC];p++){
+    acquire(&p->lock);
+    if(p->pid==pid && p->state!=UNUSED){
+      info->level=p->level;
+      for(int i=0;i<4;i++){
+        info->ticks[i]=p->ticks_total[i];
+      }
+      info->times_scheduled=p->times_scheduled;
+      info->total_syscalls=p->systemcall_count;
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;
 }
